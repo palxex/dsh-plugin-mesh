@@ -49,10 +49,35 @@ DSH 的局域网 Mesh 插件：**启动后自动发现同一网段的其他 DSH 
 - ✅ 同一网段（同一个二层广播域）内有效
 - ❌ **路由器不转发** —— 跨子网/VLAN 到不了，那种情况要配 `scanRanges`
 - ❌ **AP isolation 会连它一起挡**（那是把客户端之间的所有流量都隔离，不只是组播）
+- ❌ **Tailscale / WireGuard 这类覆盖网完全不承载组播**，只能靠扫描
 - ⚠️ 部分交换机的 IGMP snooping 在没有 querier 时会丢掉组播
 - ⚠️ Windows 防火墙默认拦入站组播，要放行 UDP 45892
 
 正因为组播有这么多坑，才加了扫描那条路：**只要 TCP 通，扫描就能发现**。
+
+### 地址模型：一次广播、多条路
+
+一台机器常常同时挂在多张网上（物理内网 `192.168.x`、Tailscale 的 `100.64.x`、
+Docker 的 `172.17.x`…），而"对端从哪条路连得上"**本机无从判断**。所以：
+
+- 心跳里带上**全部**候选地址（`hosts` 数组），按"最可能连得上"排序
+- 对端按 `实测来源地址 → 自述 hosts → 自述 host` 的顺序逐个尝试，
+  连上后把那条路记下来（对端记录自愈）
+- 多候选时先做一次只读 `/health` 探测再 POST，避免把重试变成重复投递
+
+地址排序规则（`preferredAddress()`）：
+
+| 优先级 | 判据 |
+|---|---|
+| 1 | 非虚拟网桥（`docker0` / `veth` / `vmnet` 等垫底） |
+| 2 | 地址类别：RFC1918 > **CGNAT `100.64.0.0/10`** > 公网 > 链路本地 |
+| 3 | 网卡名：`en0`/`eth0`/`wlan0` > `en*`/`eth*` > 隧道（`tailscale*`/`wg*`/`utun*`） |
+
+> `100.64.0.0/10` 是 RFC 6598 的 CGNAT 段，Tailscale / headscale 分配的就是它。
+> 它被当作**私网地址**参与排序，不会因为网卡名不叫 `eth*` 就被漏掉。
+
+万一自动挑错了首选，可以在 Mesh 页面的「对外地址」里手动钉住，
+或写配置 `announceAddress: "100.64.7.5"`。钉住只影响首选顺序，其余地址照常广播。
 
 ---
 
@@ -270,11 +295,13 @@ AP isolation、Windows 防火墙默认策略、跨 VLAN，任何一个都能让�
     useMulticast: true         # 组播被动发现
     scanOnStart: true          # 启动扫描（带退避重试）
     scanIntervalMs: 60000      # 周期扫描；0 = 关闭
-    scanRanges: []             # 额外网段，如 ["192.168.1.0/24"]；空则扫本机 /24
+    scanRanges: []             # 额外网段（/8~/32），如 ["100.64.0.0/24"]；本机 /24 始终会扫
+    scanMaxAddresses: 1024     # 单次扫描地址预算；超出的网段只扫前 N 个并告警
     scanPorts: []              # 除本机端口外额外要扫的端口
     scanConcurrency: 64
     scanTimeoutMs: 800
     pingIntervalMs: 10000      # ping 保活；0 = 关闭
+    announceAddress: ''        # 手动钉住广播首选地址，如 "100.64.7.5"；留空自动挑
     announceIntervalMs: 5000
     peerTtlMs: 20000           # 多久没消息算离线
     requirePairing: false      # 见下
@@ -385,6 +412,38 @@ Mesh 页面看到，不会被丢弃）：
 5. **`sidebar.panellist` 槽位官方插件没人用过**（翻遍 58 个客户端 bundle，只有官方侧栏
    自己声明它）。我按源码契约接的，实测注册和渲染都正常，但不如 `sidebar.footer.action`
    那样有第三方先例。
+6. **覆盖网（Tailscale 等）不能靠组播**：组播不跨 tailnet，必须把网段加进 `scanRanges`，
+   而且 `100.64.0.0/10` 有 400 万个地址、扫不完。**推荐配成若干个 /24**，
+   例如对端在 `100.64.0.0/24` 里就写 `scanRanges: ["100.64.0.0/24"]`；
+   写 `/10` 只会扫前 `scanMaxAddresses` 个并告警。
+
+---
+
+## 跨网段 / Tailscale 怎么用
+
+组播不跨 tailnet，所以两端要靠扫描。典型配置：
+
+```yaml
+- id: mesh
+  config:
+    scanRanges: ['100.64.0.0/24']   # 对端所在的 tailnet 网段（建议 /24，别写 /10）
+    scanOnStart: true
+    pingIntervalMs: 10000
+```
+
+启动日志里会看到：
+
+```
+mesh: 检测到 CGNAT/Tailscale 地址 100.64.7.2（网卡 tailscale0），已按私网地址处理
+mesh: 本机候选地址（心跳里都会带上）: 192.168.1.10, 100.64.7.2
+```
+
+两端都看得见对方却连不上时，在页面上点「探测」——它会**逐个地址**列出结果：
+
+```
+✓ 可达且已配对（走 100.64.7.9）
+✓ 100.64.7.9 (HTTP 200)   ✗ 192.168.1.99 connect ECONNREFUSED
+```
 
 ---
 
@@ -411,8 +470,21 @@ DSH_HOME=/tmp/mesh-dsh ELECTRON_RUN_AS_NODE=1 \
 发现模块可以脱离 DSH 单独测：
 
 ```bash
-node lib/_selftest-discovery.mjs alpha 45900 9000   # 两个进程同时跑可验证互相发现
+npm test                                            # 全部回归测试（不需要网络/DSH）
+node lib/_selftest-address.mjs                      # 地址分类、选地址、扫描计划
+node lib/_selftest-peerlink.mjs                     # 换路逻辑（真 HTTP server）
+node lib/_selftest-e2e.mjs                          # 扫描 → 登记 → 派发 全链路
+node lib/_selftest-discovery.mjs alpha 45900 9000   # 两个进程同时跑可验证组播互相发现
+npm run smoke                                       # 主机侧：在沙箱里真跑一遍 apply()
 ```
+
+> `_selftest-discovery.mjs` 依赖真实的组播回环。在 WSL2 / 部分容器里组播不通
+> （原版代码同样发现 0 个对端），此时用 `npm test` 里的 TCP 路径验证。
+
+`npm run smoke` 是**改完插件不用重启 DSH 也能验证**的那条路：它把插件复制进一个
+临时 `node_modules`（符号链接 DSH 自带的 `@deepseek-ai/*` 包），配上假的 ctx，
+真实调用 `apply()` —— 起对端 HTTP 服务、挂 UI 路由、注册 agent 工具，再打真实的
+`/mesh/api/*` 请求。全程不碰 `~/.dsh`（`DSH_HOME` 指向临时目录），也不开组播。
 
 ---
 
@@ -424,12 +496,35 @@ dsh-plugin-mesh/
 ├── cordis.patch.yml       # 只插入本插件（含默认配置）
 ├── lib/
 │   ├── index.js           # 主机侧：发现编排 + 对端 HTTP + agent 工具 + UI 接口 + 入站唤醒
-│   ├── discovery.js       # UDP 组播被动发现 + 对端注册表 + 过期清理
-│   ├── scan.js            # 主动扫描（固定端口 + CIDR 展开）
-│   └── _selftest-discovery.mjs
+│   ├── discovery.js       # UDP 组播被动发现 + 地址分类 + 对端注册表 + 过期清理
+│   ├── scan.js            # 主动扫描（固定端口 + CIDR 展开 + 地址预算）
+│   ├── peerlink.js        # 对端连接：候选地址换路、探测、派发（无 DSH 依赖）
+│   └── _selftest-*.mjs    # 独立回归测试
 ├── client/
 │   └── client.js          # 浏览器侧：手写 bundle，无需打包工具
+├── tools/
+│   ├── scopecheck.py      # 静态检查：模块级函数漏收 applyUnsafe 注入的变量
+│   └── host-smoke.mjs     # 沙箱里真跑一遍 apply()（不用重启 DSH）
 ├── dev-setup.sh           # 隔离测试环境搭建
 ├── dev-boot.mjs           # 带模块解析器的测试启动器
 └── README.md
 ```
+
+---
+
+## 本仓库的由来
+
+这是 [`peng456/dsh-plugin-mesh`](https://github.com/peng456/dsh-plugin-mesh) 的私人分支，
+在 `bccf68b` 基础上修了一批**局域网地址判定**的问题（原仓库上游未合并）：
+
+| # | 问题 | 后果 |
+|---|---|---|
+| 1 | `expandCidr` 只支持 `/16~/32`，且配了 `scanRanges` 就跳过本机 /24 兜底 | 写 `100.64.0.0/10`（Tailscale 网段）会**静默扫 0 个地址**，无任何提示 |
+| 2 | 选对外地址只看网卡名，`100.64.0.0/10`（RFC 6598 CGNAT）不是 RFC1918 | 广播哪个地址取决于 `os.networkInterfaces()` 枚举顺序；Windows 中文网卡名直接不匹配 |
+| 3 | 回连只信对端自述的 `host`，实测可达的 `sourceAddress` 存而不用 | 对端换了网 / 新开 Tailscale 后，"两边都看得见对方却永远连不上" |
+| 4 | `pingKnownPeers` 用自述地址覆盖 `sourceAddress` | 与注释宣称的"防伪造"相反，把唯一可信的地址弄丢 |
+| 5 | IPv6 完全不处理 | Tailscale 的 `fd7a:115c:a1e0::/48` 被无视 |
+
+修法与回归测试见 `lib/_selftest-address.mjs`、`lib/_selftest-peerlink.mjs`、
+`lib/_selftest-e2e.mjs`（共 51 条断言）。
+

@@ -186,6 +186,89 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /**
+     * 对外地址。
+     *
+     * 一台机器常常同时挂在多张网上（物理内网 + Tailscale 的 100.64/10 + 各种
+     * 虚拟网桥），"对端从哪条路连得上"本机无从判断。所以心跳里带上全部候选地址，
+     * 对端会自己换路；这里只做两件事：让用户看清楚自己在广播什么，
+     * 以及在自动挑错首选时能手动钉住一个。
+     */
+    function AddressCard({ self, onSaved }) {
+      const [busy, setBusy] = react.useState(false);
+      const [msg, setMsg] = react.useState("");
+      const list = self.addresses || [];
+      const hosts = self.hosts || [];
+      const locked = !!self.announceLockedByConfig;
+      const pinned = !!self.announceAddress;
+
+      const SCOPE_TEXT = {
+        rfc1918: "内网",
+        cgnat: "CGNAT/Tailscale",
+        linklocal: "链路本地",
+        other: "其他",
+      };
+
+      const setAnnounce = async (address) => {
+        setBusy(true);
+        const r = await call("/announce", { address });
+        setBusy(false);
+        setMsg(r && r.ok ? `广播首选已设为 ${r.applied}` : `失败：${(r && r.error) || "未知错误"}`);
+        if (r && r.ok) onSaved && onSaved();
+        setTimeout(() => setMsg(""), 4000);
+      };
+
+      return h(
+        "div",
+        { style: S.card },
+        h(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+          h("span", { style: S.cardTitle }, "对外地址"),
+          h("span", { style: { ...S.mono } }, `${self.host || "?"}:${self.port || 0}`),
+          pinned ? h("span", { style: S.tag }, locked ? "已钉住（配置）" : "已手动钉住") : null,
+        ),
+        h(
+          "div",
+          { style: { ...S.muted, marginTop: 8 } },
+          "心跳里会带上下面所有地址，对端按顺序逐个尝试；排在最前的就是首选地址。",
+          hosts.length > 1 ? ` 当前共 ${hosts.length} 个候选。` : "",
+        ),
+        h(
+          "div",
+          { style: { marginTop: 12 } },
+          list.length === 0
+            ? h("div", { style: S.muted }, "没有检测到任何非回环 IPv4 地址。")
+            : list.map((a) => {
+                const isFirst = (hosts[0] || "") === a.address;
+                return h(
+                  "div",
+                  { key: `${a.iface}-${a.address}`, style: { ...S.row, marginBottom: 6 } },
+                  h("span", { style: { ...S.mono, minWidth: 130 } }, a.address),
+                  h("span", { style: { ...S.muted, minWidth: 90 } }, a.iface || "?"),
+                  h("span", { style: S.tag }, SCOPE_TEXT[a.scope] || a.scope || "?"),
+                  isFirst ? h("span", { style: { ...S.tag, borderColor: "#2ea043", color: "#2ea043" } }, "首选") : null,
+                  locked
+                    ? null
+                    : h(
+                        "button",
+                        { style: S.btnSm, disabled: busy, onClick: () => setAnnounce(isFirst ? "" : a.address) },
+                        isFirst ? "恢复自动" : "设为首选",
+                      ),
+                );
+              }),
+        ),
+        list.some((a) => a.scope === "cgnat")
+          ? h(
+              "div",
+              { style: { ...S.muted, marginTop: 8 } },
+              "检测到 100.64.0.0/10（CGNAT / Tailscale）地址，已按私网地址参与排序和广播。",
+            )
+          : null,
+        msg ? h("div", { style: { marginTop: 8, fontSize: 12 } }, msg) : null,
+      );
+    }
+
     function SecretBox({ self, config, onSaved }) {
       const [open, setOpen] = react.useState(false);
       const [reveal, setReveal] = react.useState(false);
@@ -294,11 +377,34 @@ window.__ModuleLoader__.load({
                 [peer.hostname ? `hostname=${peer.hostname}  ` : "", peer.mac ? `mac=${peer.mac}` : ""],
               )
             : null,
+          // 对端有多条可达路径时列出来：连不上时能一眼看出还能走哪条
+          (peer.hosts || []).length > 1
+            ? h(
+                "div",
+                { style: { ...S.mono, ...S.muted, fontSize: 11 } },
+                `候选地址：${peer.hosts.join(" → ")}`,
+              )
+            : null,
           probe && probe.machine === target
             ? h(
                 "div",
                 { style: { ...S.mono, marginTop: 4, color: probe.reachable ? (probe.paired ? "#2ea043" : "#bf8700") : "#c0392b" } },
-                probe.reachable ? (probe.paired ? "✓ 可达且已配对" : "⚠ 可达但配对码不一致，无法派发") : `✗ 不可达：${probe.error || ""}`,
+                probe.pending
+                  ? "探测中…"
+                  : probe.reachable
+                    ? `✓ 可达且已配对（走 ${probe.host || peer.host}）`
+                    : probe.paired === false && probe.host
+                      ? "⚠ 可达但配对码不一致，无法派发"
+                      : `✗ 不可达：${probe.error || "所有候选地址都连不上"}`,
+              )
+            : null,
+          // 探测过就列出每个候选地址的结果 —— 跨网段 / Tailscale 场景下
+          // "到底是哪个地址不通"是唯一有用的信息
+          probe && probe.machine === target && (probe.tried || []).length > 1
+            ? h(
+                "div",
+                { style: { ...S.mono, ...S.muted, fontSize: 11, marginTop: 2 } },
+                probe.tried.map((t) => `${t.ok ? "✓" : "✗"} ${t.host}${t.status ? ` (HTTP ${t.status})` : ""}${t.error ? ` ${t.error}` : ""}`).join("   "),
               )
             : null,
         ),
@@ -408,7 +514,7 @@ window.__ModuleLoader__.load({
       const doProbe = async (machine) => {
         setProbe({ machine, pending: true });
         const r = await call("/probe", { peer: machine });
-        setProbe({ machine, ...r });
+        setProbe({ machine, ...r, error: r && r.error ? r.error : r && r.reachable ? "" : "所有候选地址都连不上" });
       };
 
       const doSend = async () => {
@@ -416,7 +522,11 @@ window.__ModuleLoader__.load({
         setBusy(true);
         const r = await call("/send", { peer: target, task, thread });
         setBusy(false);
-        setToast(r && r.ok ? `已派发给 ${target}（id ${r.id}）—— 对端会在它自己的会话里执行` : `派发失败：${(r && r.error) || "未知错误"}`);
+        setToast(
+          r && r.ok
+            ? `已派发给 ${target}${r.host ? `（${r.host}）` : ""}（id ${r.id}）—— 对端会在它自己的会话里执行`
+            : `派发失败：${(r && r.error) || "未知错误"}`,
+        );
         if (r && r.ok) setTask("");
         setTimeout(() => setToast(""), 5000);
       };
@@ -460,6 +570,8 @@ window.__ModuleLoader__.load({
         h(ThrottleCard, { items: state.throttled || [], onDone: (msg) => { setToast(msg); setTimeout(() => setToast(""), 6000); } }),
 
         h(NameCard, { self, onSaved: refresh }),
+
+        h(AddressCard, { self, onSaved: refresh }),
 
         (state.duplicateNames || []).length > 0
           ? h(
