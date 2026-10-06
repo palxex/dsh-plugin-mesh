@@ -511,7 +511,10 @@ node lib/_selftest-peerlink.mjs                     # 换路逻辑（真 HTTP se
 node lib/_selftest-e2e.mjs                          # 扫描 → 登记 → 派发 全链路
 node lib/_selftest-proxy.mjs                        # 全局挂代理时仍能直连对端
 node lib/_selftest-discovery.mjs alpha 45900 9000   # 两个进程同时跑可验证组播互相发现
-npm run smoke                                       # 主机侧：在沙箱里真跑一遍 apply()
+npm run smoke                                       # 主机侧：host-smoke + startup-check
+node tools/host-smoke.mjs                           # 沙箱里真跑 apply()，验证路由/配置/地址
+node tools/startup-check.mjs                        # 集成：真跑 apply() + 启动扫描，专盯异步崩溃
+node tools/startup-check.mjs --real                 # 同上但用真实网卡，会真连 tailnet
 ```
 
 > `_selftest-discovery.mjs` 依赖真实的组播回环。在 WSL2 / 部分容器里组播不通
@@ -521,6 +524,14 @@ npm run smoke                                       # 主机侧：在沙箱里�
 临时 `node_modules`（符号链接 DSH 自带的 `@deepseek-ai/*` 包），配上假的 ctx，
 真实调用 `apply()` —— 起对端 HTTP 服务、挂 UI 路由、注册 agent 工具，再打真实的
 `/mesh/api/*` 请求。全程不碰 `~/.dsh`（`DSH_HOME` 指向临时目录），也不开组播。
+
+> **为什么还需要 `startup-check.mjs`**：`lib/_selftest-*.mjs` 都是**直接调用**模块函数，
+> 绕过了 `index.js` 的接线。2026-10-06 就栽在这里——`index.js` 把一个只有 `{aborted}`
+> 的裸取消令牌当 `AbortSignal` 传进了 `directFetch`，socket 出错时在事件回调里抛
+> `TypeError`，逃逸成**未捕获异常**，直接把 `dsh web` 打挂；而当时 4 个单测文件全绿。
+> 所以这个脚本做的是集成验证：真实 `apply()`、真实打开启动扫描、真实等待异步回调，
+> 任何 `uncaughtException` / `unhandledRejection` 都算失败。
+> 它在**修复前必须先失败**——否则这个检查就是空的。
 
 ---
 
@@ -541,7 +552,8 @@ dsh-plugin-mesh/
 │   └── client.js          # 浏览器侧：手写 bundle，无需打包工具
 ├── tools/
 │   ├── scopecheck.py      # 静态检查：模块级函数漏收 applyUnsafe 注入的变量
-│   └── host-smoke.mjs     # 沙箱里真跑一遍 apply()（不用重启 DSH）
+│   ├── host-smoke.mjs     # 沙箱里真跑一遍 apply()（不用重启 DSH）
+│   └── startup-check.mjs  # 集成：真跑 apply() + 启动扫描，盯未捕获异常
 ├── dev-setup.sh           # 隔离测试环境搭建
 ├── dev-boot.mjs           # 带模块解析器的测试启动器
 └── README.md
