@@ -42,7 +42,7 @@ for (const name of readdirSync(DSH_MODULES)) {
     /* 已存在或不允许，跳过 */
   }
 }
-const pkgDir = join(sandbox, "node_modules", "dsh-plugin-mesh");
+const pkgDir = join(sandbox, "node_modules", "@palxex", "dsh-plugin-mesh");
 mkdirSync(pkgDir, { recursive: true });
 for (const item of ["lib", "client", "package.json", "cordis.patch.yml"]) {
   cpSync(join(ROOT, item), join(pkgDir, item), { recursive: true });

@@ -1,5 +1,5 @@
 /**
- * dsh-plugin-mesh —— 浏览器侧（Client half）
+ * @palxex/dsh-plugin-mesh —— 浏览器侧（Client half）
  *
  * 手写的 __ModuleLoader__ bundle，不需要打包工具。
  * 只依赖 react，数据走相对路径 fetch('/mesh/api/*')（同源）。
@@ -12,7 +12,7 @@
  * 所以不依赖插件加载顺序。
  */
 window.__ModuleLoader__.load({
-  id: "dsh-plugin-mesh",
+  id: "@palxex/dsh-plugin-mesh",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
@@ -532,7 +532,7 @@ window.__ModuleLoader__.load({
       };
 
       if (error && !state) {
-        return h("div", { style: S.page }, h("div", { style: S.pageInner }, h("h1", { style: S.h1 }, "局域网 Mesh"), h("div", { style: S.card }, `无法读取本机 mesh 状态：${error}`, h("div", { style: { ...S.muted, marginTop: 8 } }, "请确认主机侧插件 dsh-plugin-mesh 已加载。"))));
+        return h("div", { style: S.page }, h("div", { style: S.pageInner }, h("h1", { style: S.h1 }, "局域网 Mesh"), h("div", { style: S.card }, `无法读取本机 mesh 状态：${error}`, h("div", { style: { ...S.muted, marginTop: 8 } }, "请确认主机侧插件 @palxex/dsh-plugin-mesh 已加载。"))));
       }
       if (!state) return h("div", { style: S.page }, h("div", { style: S.pageInner }, "正在加载…"));
 
@@ -608,7 +608,7 @@ window.__ModuleLoader__.load({
                     "ul",
                     { style: { margin: "6px 0 0 18px", padding: 0 } },
                     h("li", null, "两台机器在同一网段吗"),
-                    h("li", null, `对端也装了 dsh-plugin-mesh、并且用的是同一个端口（本机 ${self.port}）吗`),
+                    h("li", null, `对端也装了 @palxex/dsh-plugin-mesh、并且用的是同一个端口（本机 ${self.port}）吗`),
                     h("li", null, "对端防火墙是否放行这个 TCP 端口（以及 UDP 45892 组播）"),
                   ),
                 )
