@@ -1,10 +1,10 @@
 {
-  "name": "dsh-plugin-mesh",
+  "name": "@palxex/dsh-plugin-mesh",
   "version": "0.2.0",
   "type": "module",
-  "description": "DSH 局域网 Mesh：自动发现同网段的其他 DSH 实例，提供对端操作页面，并支持跨机双向派发任务。",
+  "description": "DSH 局域网 Mesh（palxex 维护的 fork）：自动发现同网段/同 tailnet 的其他 DSH 实例，跨机双向派发任务。上游 peng456/dsh-plugin-mesh（MIT）。",
   "license": "MIT",
-  "author": "peng456",
+  "author": "peng456 (upstream)",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -15,13 +15,13 @@
     "discovery",
     "remote"
   ],
-  "homepage": "https://github.com/peng456/dsh-plugin-mesh#readme",
+  "homepage": "https://github.com/palxex/dsh-plugin-mesh#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/peng456/dsh-plugin-mesh.git"
+    "url": "git+https://github.com/palxex/dsh-plugin-mesh.git"
   },
   "bugs": {
-    "url": "https://github.com/peng456/dsh-plugin-mesh/issues"
+    "url": "https://github.com/palxex/dsh-plugin-mesh/issues"
   },
   "main": "./lib/index.js",
   "exports": {
@@ -93,5 +93,11 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "contributors": [
+    "palxex (https://github.com/palxex)"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

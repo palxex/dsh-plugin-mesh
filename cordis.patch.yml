@@ -16,7 +16,7 @@
 
 - insert:
     - id: mesh
-      name: 'dsh-plugin-mesh'
+      name: '@palxex/dsh-plugin-mesh'
       config:
         enabled: true
 
