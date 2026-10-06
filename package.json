@@ -38,10 +38,10 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node lib/_selftest-address.mjs && node lib/_selftest-peerlink.mjs && node lib/_selftest-e2e.mjs",
+    "test": "node lib/_selftest-address.mjs && node lib/_selftest-peerlink.mjs && node lib/_selftest-e2e.mjs && node lib/_selftest-proxy.mjs",
     "smoke": "node tools/host-smoke.mjs",
     "selftest": "node lib/_selftest-discovery.mjs",
-    "check": "node --check lib/index.js && node --check lib/discovery.js && node --check lib/scan.js && node --check lib/peerlink.js && node --check client/client.js",
+    "check": "node --check lib/index.js && node --check lib/discovery.js && node --check lib/scan.js && node --check lib/peerlink.js && node --check lib/directfetch.js && node --check client/client.js",
     "check:scope": "python3 tools/scopecheck.py lib/index.js"
   },
   "peerDependencies": {
@@ -54,13 +54,27 @@
     "@deepseek-ai/dsh-client-locale": "*"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/schemastery": { "optional": true },
-    "@deepseek-ai/dsh-tools": { "optional": true },
-    "@deepseek-ai/dsh-llm": { "optional": true },
-    "@deepseek-ai/dsh-client-connection": { "optional": true },
-    "@deepseek-ai/dsh-client-ui-primitives": { "optional": true },
-    "@deepseek-ai/dsh-client-ui-slots": { "optional": true },
-    "@deepseek-ai/dsh-client-locale": { "optional": true }
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-connection": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-primitives": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-slots": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-locale": {
+      "optional": true
+    }
   },
   "dsh": {
     "bundle": {

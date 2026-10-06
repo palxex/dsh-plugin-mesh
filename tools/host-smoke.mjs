@@ -51,6 +51,11 @@ const dshHome = join(sandbox, "dsh-home");
 mkdirSync(dshHome, { recursive: true });
 process.env.DSH_HOME = dshHome;
 
+// 模拟"DSH 全局挂了代理"：只设 http_proxy、**不开** NODE_USE_ENV_PROXY，
+// 这样插件会打出"一律直连"的提示，而本测试自己用到的全局 fetch 不受影响
+// （undici 要 NODE_USE_ENV_PROXY=1 才会读代理变量）。
+process.env.http_proxy = "http://127.0.0.1:1";
+
 // 桩化网卡：物理内网 + Tailscale 的 100.64/10（本机真实网卡不参与，保证可重复）
 const iface = (address, mac = "aa:bb:cc:dd:ee:ff") => [
   { address, netmask: "255.255.255.0", family: "IPv4", mac, internal: false, cidr: `${address}/24` },
@@ -179,6 +184,12 @@ await test("100.64/10 被明确识别为私网地址并打日志", () => {
   const line = logs.find((l) => l.includes("检测到 CGNAT/Tailscale 地址"));
   assert.ok(line, `缺少 CGNAT 识别日志: ${logs.join(" | ")}`);
   assert.match(line, /100\.64\.7\.2/);
+});
+
+await test("检测到代理配置时说明本插件直连、不走代理", () => {
+  const line = logs.find((l) => l.includes("一律直连"));
+  assert.ok(line, `缺少代理提示日志: ${logs.join(" | ")}`);
+  assert.match(line, /http_proxy/);
 });
 
 await test("广播候选列表同时包含物理内网与 Tailscale 地址", () => {

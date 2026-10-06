@@ -447,6 +447,41 @@ mesh: 本机候选地址（心跳里都会带上）: 192.168.1.10, 100.64.7.2
 
 ---
 
+## 与 HTTP 代理共存（踩过的坑）
+
+**症状**：DSH 全局挂了代理时，出现**单向发现**——"对端能发现我，我永远发现不了对端"。
+
+**原因**：`NODE_USE_ENV_PROXY=1` 会让 Node 的 `fetch` 按 `http_proxy` 代理**所有**请求，
+只有 `no_proxy` 命中的例外。而 undici 的 `no_proxy` 匹配规则很窄（实测）：
+
+| 写法 | 是否生效 |
+|---|---|
+| `127.0.0.1` | ✅ 精确命中 |
+| `*` | ✅ 全部绕过 |
+| `127.0.0.*` | ❌ 通配无效 |
+| `127.0.0.0/8` | ❌ CIDR 无效 |
+
+所以 `no_proxy=...,10.*,172.16.*,192.168.*` 这类常见写法**对 Node 完全无效**
+（对 curl 才有效）——它们一直"看起来能用"，是因为代理通常就跑在本机，
+转发到本机局域网地址当然也能成功。而 `100.64.0.0/10`（Tailscale）根本没法用
+通配或 CIDR 表达，逐条列 IP 又不现实。
+
+**本插件的做法**：所有对端通信走 `lib/directfetch.js`——基于 `node:http` 自己实现，
+**从不读取代理环境变量**。因为插件只会访问局域网 / tailnet 里的 mesh 对端
+（固定端口 45917 的明文 HTTP），没有任何理由走代理。
+
+启动日志里会说明一句：
+
+```
+mesh: 检测到代理配置（http_proxy, https_proxy, NODE_USE_ENV_PROXY）；本插件与对端的通信一律直连，不经过代理
+```
+
+> 注意：这只影响**本插件**。其他插件的出站请求仍按你的代理配置走。
+> 回归测试见 `lib/_selftest-proxy.mjs`——它在子进程里设好代理环境，
+> 先断言全局 `fetch` **确实**被打挂（证明测试不是空的），再断言插件各条路径仍然直连成功。
+
+---
+
 ## 开发与测试
 
 ```bash
@@ -474,6 +509,7 @@ npm test                                            # 全部回归测试（不�
 node lib/_selftest-address.mjs                      # 地址分类、选地址、扫描计划
 node lib/_selftest-peerlink.mjs                     # 换路逻辑（真 HTTP server）
 node lib/_selftest-e2e.mjs                          # 扫描 → 登记 → 派发 全链路
+node lib/_selftest-proxy.mjs                        # 全局挂代理时仍能直连对端
 node lib/_selftest-discovery.mjs alpha 45900 9000   # 两个进程同时跑可验证组播互相发现
 npm run smoke                                       # 主机侧：在沙箱里真跑一遍 apply()
 ```
@@ -499,6 +535,7 @@ dsh-plugin-mesh/
 │   ├── discovery.js       # UDP 组播被动发现 + 地址分类 + 对端注册表 + 过期清理
 │   ├── scan.js            # 主动扫描（固定端口 + CIDR 展开 + 地址预算）
 │   ├── peerlink.js        # 对端连接：候选地址换路、探测、派发（无 DSH 依赖）
+│   ├── directfetch.js     # 直连 HTTP（node:http 实现，永不经过环境变量代理）
 │   └── _selftest-*.mjs    # 独立回归测试
 ├── client/
 │   └── client.js          # 浏览器侧：手写 bundle，无需打包工具
@@ -524,7 +561,9 @@ dsh-plugin-mesh/
 | 3 | 回连只信对端自述的 `host`，实测可达的 `sourceAddress` 存而不用 | 对端换了网 / 新开 Tailscale 后，"两边都看得见对方却永远连不上" |
 | 4 | `pingKnownPeers` 用自述地址覆盖 `sourceAddress` | 与注释宣称的"防伪造"相反，把唯一可信的地址弄丢 |
 | 5 | IPv6 完全不处理 | Tailscale 的 `fd7a:115c:a1e0::/48` 被无视 |
+| 6 | 出站请求用全局 `fetch`，`NODE_USE_ENV_PROXY=1` 时会被 `http_proxy` 代理 | `no_proxy` 无法表达 `100.64.0.0/10` → **单向发现**（对端能看见我，我看不见对端） |
 
 修法与回归测试见 `lib/_selftest-address.mjs`、`lib/_selftest-peerlink.mjs`、
-`lib/_selftest-e2e.mjs`（共 51 条断言）。
+`lib/_selftest-e2e.mjs`、`lib/_selftest-proxy.mjs`（共 60 条断言），
+外加 `tools/host-smoke.mjs`（15 条）与 `npm run smoke`。
 
