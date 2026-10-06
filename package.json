@@ -39,10 +39,11 @@
   ],
   "scripts": {
     "test": "node lib/_selftest-address.mjs && node lib/_selftest-peerlink.mjs && node lib/_selftest-e2e.mjs && node lib/_selftest-proxy.mjs",
-    "smoke": "node tools/host-smoke.mjs && node tools/startup-check.mjs",
+    "smoke": "node tools/host-smoke.mjs && node tools/startup-check.mjs && node tools/service-api-check.mjs",
     "selftest": "node lib/_selftest-discovery.mjs",
     "check": "node --check lib/index.js && node --check lib/discovery.js && node --check lib/scan.js && node --check lib/peerlink.js && node --check lib/directfetch.js && node --check client/client.js",
-    "check:scope": "python3 tools/scopecheck.py lib/index.js"
+    "check:scope": "python3 tools/scopecheck.py lib/index.js",
+    "check:api": "node tools/service-api-check.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "*",
