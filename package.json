@@ -1,6 +1,6 @@
 {
   "name": "@palxex/dsh-plugin-mesh",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "DSH 局域网 Mesh（palxex 维护的 fork）：自动发现同网段/同 tailnet 的其他 DSH 实例，跨机双向派发任务。上游 peng456/dsh-plugin-mesh（MIT）。",
   "license": "MIT",
@@ -38,7 +38,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node lib/_selftest-address.mjs && node lib/_selftest-peerlink.mjs && node lib/_selftest-e2e.mjs && node lib/_selftest-proxy.mjs",
+    "test": "node lib/_selftest-address.mjs && node lib/_selftest-portpool.mjs && node lib/_selftest-peerlink.mjs && node lib/_selftest-e2e.mjs && node lib/_selftest-proxy.mjs",
     "smoke": "node tools/host-smoke.mjs && node tools/startup-check.mjs && node tools/service-api-check.mjs && node tools/name-check.mjs",
     "selftest": "node lib/_selftest-discovery.mjs",
     "check": "node --check lib/index.js && node --check lib/discovery.js && node --check lib/scan.js && node --check lib/peerlink.js && node --check lib/directfetch.js && node --check client/client.js",

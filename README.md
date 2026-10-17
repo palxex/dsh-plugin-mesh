@@ -30,16 +30,42 @@ DSH 的局域网 Mesh 插件：**启动后自动发现同一网段的其他 DSH 
 
 | 路径 | 做法 | 优点 | 缺点 |
 |---|---|---|---|
-| **组播心跳** | 每 5s 向 `239.255.42.99:45892` 广播，同时监听 | 零配置、即时、不产生额外连接 | 可能被路由器/防火墙挡掉 |
-| **主动扫描** | 并发 GET 本网段每台机器的 `:45917/mesh/v1/health` | 只要 TCP 通就能成，最可靠 | 扫一次约 1~2 秒；254 个地址 |
+| **组播心跳** | 每 5s 向 `239.255.42.99` 的端口池（`45892/45893/45894`）各广播一次，自己只绑池内第一个空闲端口 | 零配置、即时、不产生额外连接 | 可能被路由器/防火墙挡掉 |
+| **主动扫描** | 并发 GET 本网段每台机器的 `:45917` `:45918` `:45919` 的 `/mesh/v1/health` | 只要 TCP 通就能成，最可靠 | 扫一次约 1~2 秒；254 个地址 × 端口数 |
 
 再加一条**ping 保活**：每 10s GET 已知对端的 `/mesh/v1/health`，刷新在线状态。
 这条让"发现"一旦建立就不再依赖组播 —— 即使组播完全不通，扫描见过一次之后也能一直维持。
 
 扫描时机：**启动时**（带退避重试，因为常抢在对方启动之前）+ **每 60s** 一次 + UI 上手动触发。
 
-**默认端口 45917**。固定端口是"扫一下就能连上"的前提。同机跑多个实例时端口会被占用，
-此时自动退回随机端口（组播仍能找到，但主动扫描扫不到它）。
+### 端口池：为什么不是单个固定端口
+
+**默认端口 45917**，固定端口是"扫一下就能连上"的前提。但一台机器上完全可能同时跑两个
+实例 —— 最典型的是 **Windows 桌面端 + WSL 里的 `dsh web`**，而 WSL 一旦开了
+`networkingMode=mirrored`，两边就**共用同一套网卡、IP 和端口空间**：
+
+- 谁先绑上 `45917` / `45892`，谁就独占；
+- 后到的那个拿到 `EADDRINUSE`，UDP 侧在 Windows 上即使 `reuseAddr=true` 也只会拿到
+  `EACCES`（镜像层用的是独占绑定）；
+- 结果是后到者组播 socket 从未建立：**发不出心跳，也收不到任何心跳**。
+
+旧版在这种情况下直接 `listen(0)` 退回随机端口，于是它既扫不到别人、也扫不到自己 ——
+两个致命后果叠在一起，就是"WSL 里一切正常，外面这台一台都发现不了"。
+
+所以现在两条路都用**端口池**：
+
+| | 行为 |
+|---|---|
+| `port` + `fallbackPorts` | 依次尝试 `45917 → 45918 → 45919`，全被占才退回随机端口 |
+| `multicastPorts` | 只绑池内**第一个**能绑上的端口，但心跳**发往池内全部端口** |
+
+组播为什么"只绑一个、发全部"：如果每个实例都把池内所有端口绑上，第一个实例就把池子
+占满了，第二个照样没得用 —— 那等于没解决任何问题。而"发往全部端口"保证了 A 绑
+`45892`、B 绑 `45893` 时，A 的心跳 B 在 `45893` 能收到，B 的心跳 A 在 `45892` 能收到。
+
+⚠️ **升级要两边都升**：新版会往三个端口发心跳，但老版（0.2.0）只往 `45892` 发。
+只升一侧时，绑在 `45893` 的那个收不到老版对端的心跳 —— 不过主动扫描（会扫整个端口池）
+仍然能发现它。
 
 ### 组播的作用范围：比"局域网"更窄
 
@@ -51,7 +77,7 @@ DSH 的局域网 Mesh 插件：**启动后自动发现同一网段的其他 DSH 
 - ❌ **AP isolation 会连它一起挡**（那是把客户端之间的所有流量都隔离，不只是组播）
 - ❌ **Tailscale / WireGuard 这类覆盖网完全不承载组播**，只能靠扫描
 - ⚠️ 部分交换机的 IGMP snooping 在没有 querier 时会丢掉组播
-- ⚠️ Windows 防火墙默认拦入站组播，要放行 UDP 45892
+- ⚠️ Windows 防火墙默认拦入站组播，要放行 UDP 45892~45894
 
 正因为组播有这么多坑，才加了扫描那条路：**只要 TCP 通，扫描就能发现**。
 
@@ -121,7 +147,11 @@ Docker 的 `172.17.x`…），而"对端从哪条路连得上"**本机无从判�
 | **零配对派发任务** | ✅ `ok: true`，全程没有任何配对操作 |
 | **对端 agent 被唤醒** | ✅ 建了 `mesh-*` 会话，17 个事件，含任务提示词 + 线程 + 回派指令，`turn/start` → `assistant/attempt` |
 | **离线判定** | ✅ 杀掉对端后约 20 秒标记离线（ttl 20s） |
-| 固定端口被占用 → 回退 | ✅ 配置 45919、实际 63570 |
+| 固定端口被占用 → 回退 | ✅ 配置 45919、实际 63570（旧版行为，现已改为池内下一个固定端口） |
+| **端口池：主端口被占 → 绑池内下一个** | ✅ Linux + Windows 双平台，`_selftest-portpool.mjs` |
+| **端口池：心跳发往池内全部端口** | ✅ 绑 `x+1` 时在 `x+2` 上能收到心跳 |
+| **端口池：两实例各绑一个仍互相可见** | ✅ 双向发现，不再是"有你没我" |
+| **端口池：TCP 池内全占 → 随机兜底** | ✅ 返回 `inPool:false`，日志明确标注 |
 | `requirePairing: true` 时 | ✅ 错误 token → 403；正确 token → 200 |
 | **首次启动询问名字** | ✅ 未命名时 `needsName=true`，输入框预填主机名 |
 | **改名立刻传播** | ✅ 改完 **2 秒内**对端就看到新名字（立即重新广播） |
@@ -136,9 +166,11 @@ Docker 的 `172.17.x`…），而"对端从哪条路连得上"**本机无从判�
 **没验证的**（如实说明）：
 - 没在你**正在运行的** DSH Desktop 里验证 —— 需要重启应用，会掐断本次会话。
   用 `dev-boot.mjs` 复现了真实主进程的模块解析行为来代替。
-- Windows 侧没跑（手上没那台机器）。代码跨平台，但 Windows 防火墙要放行 TCP 45917
-  和 UDP 45892。
-- 扫多端口（`scanPorts`）是我为了在同机测试才加的，真实两机场景用不到。
+- Windows 侧只在 Electron-as-node 环境里跑过自测（端口池、组播回环、TCP 回退都过了），
+  没在完整的 DSH Desktop + WSL mirrored 组合上跑端到端。防火墙要放行 TCP 45917~45919
+  和 UDP 45892~45894。
+- `scanPorts` 仍然保留，但它现在只用于**追加池外**的端口 —— `port` 和 `fallbackPorts`
+  是始终会扫的。
 
 ---
 
@@ -212,8 +244,8 @@ dsh plugin add /path/to/dsh-plugin-mesh
 ### Windows 防火墙
 
 ```powershell
-New-NetFirewallRule -DisplayName "DSH Mesh" -Direction Inbound -Protocol TCP -LocalPort 45917 -Action Allow
-New-NetFirewallRule -DisplayName "DSH Mesh (multicast)" -Direction Inbound -Protocol UDP -LocalPort 45892 -Action Allow
+New-NetFirewallRule -DisplayName "DSH Mesh" -Direction Inbound -Protocol TCP -LocalPort 45917-45919 -Action Allow
+New-NetFirewallRule -DisplayName "DSH Mesh (multicast)" -Direction Inbound -Protocol UDP -LocalPort 45892-45894 -Action Allow
 ```
 
 只放行 TCP 也行 —— 那时靠主动扫描发现，不依赖组播。
@@ -292,13 +324,15 @@ AP isolation、Windows 防火墙默认策略、跨 VLAN，任何一个都能让�
   config:
     machineName: ''            # 对端列表里的名字，留空用主机名
     port: 45917                # 固定端口
+    fallbackPorts: [45918, 45919]  # 主端口被占时依次尝试（同机多实例 / WSL mirrored）
     useMulticast: true         # 组播被动发现
+    multicastPorts: [45892, 45893, 45894]  # 只绑第一个空闲的，但心跳发往全部
     scanOnStart: true          # 启动扫描（带退避重试）
     scanIntervalMs: 60000      # 周期扫描；0 = 关闭
     scanRanges: []             # 额外网段（/8~/32），如 ["100.64.0.0/24"]；本机 /24 始终会扫
     scanMaxAddresses: 1024     # 单次扫描地址预算；超出的网段只扫前 N 个并告警
-    scanPorts: []              # 除本机端口外额外要扫的端口
-    scanConcurrency: 64
+    scanPorts: []              # 除 port + fallbackPorts 外额外要扫的端口
+    scanConcurrency: 128       # 并发探测数（多端口扫描，默认比旧版翻倍）
     scanTimeoutMs: 800
     pingIntervalMs: 10000      # ping 保活；0 = 关闭
     announceAddress: ''        # 手动钉住广播首选地址，如 "100.64.7.5"；留空自动挑
@@ -407,8 +441,9 @@ Mesh 页面看到，不会被丢弃）：
 2. **去重只在进程生命周期内**（内存），重启后同 id 会重复入箱。
 3. **没有离线排队**：对端离线时 `mesh_run` 直接失败，不暂存重投。
    （要这个能力可以用工作区里的 `lanmsg.py`。）
-4. **同机多实例**：第二个实例端口被占会退回随机端口，主动扫描扫不到它（组播仍能发现）。
-   真要同机多实例，给它们配不同 `port` 和对方的 `scanPorts`。
+4. **同机多实例**：端口池能容纳的实例数是有限的（默认 TCP 3 个、组播 3 个）。
+   超过之后新实例只能退回随机端口，主动扫描扫不到它。真要跑更多，把
+   `fallbackPorts` / `multicastPorts` 加长即可 —— 代价是心跳和扫描的端口数同步增加。
 5. **`sidebar.panellist` 槽位官方插件没人用过**（翻遍 58 个客户端 bundle，只有官方侧栏
    自己声明它）。我按源码契约接的，实测注册和渲染都正常，但不如 `sidebar.footer.action`
    那样有第三方先例。
@@ -507,6 +542,7 @@ DSH_HOME=/tmp/mesh-dsh ELECTRON_RUN_AS_NODE=1 \
 ```bash
 npm test                                            # 全部回归测试（不需要网络/DSH）
 node lib/_selftest-address.mjs                      # 地址分类、选地址、扫描计划
+node lib/_selftest-portpool.mjs                     # 端口池：组播回退 + 发全部端口 + TCP 回退
 node lib/_selftest-peerlink.mjs                     # 换路逻辑（真 HTTP server）
 node lib/_selftest-e2e.mjs                          # 扫描 → 登记 → 派发 全链路
 node lib/_selftest-proxy.mjs                        # 全局挂代理时仍能直连对端
@@ -544,7 +580,8 @@ dsh-plugin-mesh/
 ├── lib/
 │   ├── index.js           # 主机侧：发现编排 + 对端 HTTP + agent 工具 + UI 接口 + 入站唤醒
 │   ├── discovery.js       # UDP 组播被动发现 + 地址分类 + 对端注册表 + 过期清理
-│   ├── scan.js            # 主动扫描（固定端口 + CIDR 展开 + 地址预算）
+│   ├── scan.js            # 主动扫描（端口池 + CIDR 展开 + 地址预算）
+│   ├── portpool.js        # 端口池回退（池内依次监听，全占才退随机）—— 单独可测
 │   ├── peerlink.js        # 对端连接：候选地址换路、探测、派发（无 DSH 依赖）
 │   ├── directfetch.js     # 直连 HTTP（node:http 实现，永不经过环境变量代理）
 │   └── _selftest-*.mjs    # 独立回归测试
