@@ -30,8 +30,8 @@ DSH 的局域网 Mesh 插件：**启动后自动发现同一网段的其他 DSH 
 
 | 路径 | 做法 | 优点 | 缺点 |
 |---|---|---|---|
-| **组播心跳** | 每 5s 向 `239.255.42.99` 的端口池（`45892/45893/45894`）各广播一次，自己只绑池内第一个空闲端口 | 零配置、即时、不产生额外连接 | 可能被路由器/防火墙挡掉 |
-| **主动扫描** | 并发 GET 本网段每台机器的 `:45917` `:45918` `:45919` 的 `/mesh/v1/health` | 只要 TCP 通就能成，最可靠 | 扫一次约 1~2 秒；254 个地址 × 端口数 |
+| **组播心跳** | 每 5s 向 `239.255.42.99` 的端口池（`45892/41443/48119/51307/54757`）各广播一次，自己只绑池内第一个空闲端口 | 零配置、即时、不产生额外连接 | 可能被路由器/防火墙挡掉 |
+| **主动扫描** | 并发 GET 本网段每台机器**端口池里每个端口**的 `/mesh/v1/health` | 只要 TCP 通就能成，最可靠 | 扫一次约 1~2 秒；254 个地址 × 端口数 |
 
 再加一条**ping 保活**：每 10s GET 已知对端的 `/mesh/v1/health`，刷新在线状态。
 这条让"发现"一旦建立就不再依赖组播 —— 即使组播完全不通，扫描见过一次之后也能一直维持。
@@ -56,15 +56,15 @@ DSH 的局域网 Mesh 插件：**启动后自动发现同一网段的其他 DSH 
 
 | | 行为 |
 |---|---|
-| `port` + `fallbackPorts` | 依次尝试 `45917 → 45918 → 45919`，全被占才退回随机端口 |
+| `port` + `fallbackPorts` | 依次尝试 `45917 → 41521 → 42839 → 48271 → 51349 → 54709 → 58237 → 61553`，全被占才退回随机端口 |
 | `multicastPorts` | 只绑池内**第一个**能绑上的端口，但心跳**发往池内全部端口** |
 
 组播为什么"只绑一个、发全部"：如果每个实例都把池内所有端口绑上，第一个实例就把池子
 占满了，第二个照样没得用 —— 那等于没解决任何问题。而"发往全部端口"保证了 A 绑
-`45892`、B 绑 `45893` 时，A 的心跳 B 在 `45893` 能收到，B 的心跳 A 在 `45892` 能收到。
+`45892`、B 绑 `41443` 时，A 的心跳 B 在 `41443` 能收到，B 的心跳 A 在 `45892` 能收到。
 
-⚠️ **升级要两边都升**：新版会往三个端口发心跳，但老版（0.2.0）只往 `45892` 发。
-只升一侧时，绑在 `45893` 的那个收不到老版对端的心跳 —— 不过主动扫描（会扫整个端口池）
+⚠️ **升级要两边都升**：新版会往池内五个端口发心跳，但老版（0.2.0）只往 `45892` 发。
+只升一侧时，绑在 `41443` 的那个收不到老版对端的心跳 —— 不过主动扫描（会扫整个端口池）
 仍然能发现它。
 
 ### 组播的作用范围：比"局域网"更窄
@@ -77,7 +77,7 @@ DSH 的局域网 Mesh 插件：**启动后自动发现同一网段的其他 DSH 
 - ❌ **AP isolation 会连它一起挡**（那是把客户端之间的所有流量都隔离，不只是组播）
 - ❌ **Tailscale / WireGuard 这类覆盖网完全不承载组播**，只能靠扫描
 - ⚠️ 部分交换机的 IGMP snooping 在没有 querier 时会丢掉组播
-- ⚠️ Windows 防火墙默认拦入站组播，要放行 UDP 45892~45894
+- ⚠️ Windows 防火墙默认拦入站组播，要放行 UDP 45892、41443、48119、51307、54757
 
 正因为组播有这么多坑，才加了扫描那条路：**只要 TCP 通，扫描就能发现**。
 
@@ -167,8 +167,8 @@ Docker 的 `172.17.x`…），而"对端从哪条路连得上"**本机无从判�
 - 没在你**正在运行的** DSH Desktop 里验证 —— 需要重启应用，会掐断本次会话。
   用 `dev-boot.mjs` 复现了真实主进程的模块解析行为来代替。
 - Windows 侧只在 Electron-as-node 环境里跑过自测（端口池、组播回环、TCP 回退都过了），
-  没在完整的 DSH Desktop + WSL mirrored 组合上跑端到端。防火墙要放行 TCP 45917~45919
-  和 UDP 45892~45894。
+  没在完整的 DSH Desktop + WSL mirrored 组合上跑端到端。防火墙要放行 TCP 45917、41521、42839、48271、51349、54709、58237、61553
+  和 UDP 45892、41443、48119、51307、54757。
 - `scanPorts` 仍然保留，但它现在只用于**追加池外**的端口 —— `port` 和 `fallbackPorts`
   是始终会扫的。
 
@@ -244,8 +244,8 @@ dsh plugin add /path/to/dsh-plugin-mesh
 ### Windows 防火墙
 
 ```powershell
-New-NetFirewallRule -DisplayName "DSH Mesh" -Direction Inbound -Protocol TCP -LocalPort 45917-45919 -Action Allow
-New-NetFirewallRule -DisplayName "DSH Mesh (multicast)" -Direction Inbound -Protocol UDP -LocalPort 45892-45894 -Action Allow
+New-NetFirewallRule -DisplayName "DSH Mesh" -Direction Inbound -Protocol TCP -LocalPort 45917,41521,42839,48271,51349,54709,58237,61553 -Action Allow
+New-NetFirewallRule -DisplayName "DSH Mesh (multicast)" -Direction Inbound -Protocol UDP -LocalPort 45892,41443,48119,51307,54757 -Action Allow
 ```
 
 只放行 TCP 也行 —— 那时靠主动扫描发现，不依赖组播。
@@ -324,9 +324,9 @@ AP isolation、Windows 防火墙默认策略、跨 VLAN，任何一个都能让�
   config:
     machineName: ''            # 对端列表里的名字，留空用主机名
     port: 45917                # 固定端口
-    fallbackPorts: [45918, 45919]  # 主端口被占时依次尝试（同机多实例 / WSL mirrored）
+    fallbackPorts: [41521, 42839, 48271, 51349, 54709, 58237, 61553]  # 分散取值，避免被整段预留一锅端
     useMulticast: true         # 组播被动发现
-    multicastPorts: [45892, 45893, 45894]  # 只绑第一个空闲的，但心跳发往全部
+    multicastPorts: [45892, 41443, 48119, 51307, 54757]  # 只绑第一个空闲的，但心跳发往全部
     scanOnStart: true          # 启动扫描（带退避重试）
     scanIntervalMs: 60000      # 周期扫描；0 = 关闭
     scanRanges: []             # 额外网段（/8~/32），如 ["100.64.0.0/24"]；本机 /24 始终会扫
@@ -521,7 +521,7 @@ mesh: 检测到代理配置（http_proxy, https_proxy, NODE_USE_ENV_PROXY）；�
 
 ```bash
 # 搭隔离环境（把插件真实复制进 profile，不碰你的 desktop profile）
-MACHINE=macbox PORT=45917 MULTICAST=false SCAN_PORTS="[45918]" \
+MACHINE=macbox PORT=45917 MULTICAST=false SCAN_PORTS="[41521]" \
   ./dev-setup.sh meshtest /tmp/mesh-dsh
 
 # 启动（dev-boot.mjs 复现真实主进程的模块解析行为）
