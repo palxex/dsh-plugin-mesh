@@ -1,6 +1,6 @@
 {
   "name": "@palxex/dsh-plugin-mesh",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "description": "DSH 局域网 Mesh（palxex 维护的 fork）：自动发现同网段/同 tailnet 的其他 DSH 实例，跨机双向派发任务。上游 peng456/dsh-plugin-mesh（MIT）。",
   "license": "MIT",
